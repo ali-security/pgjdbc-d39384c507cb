@@ -5,6 +5,8 @@
 
 package org.postgresql.util;
 
+import static org.junit.Assert.assertThrows;
+
 import org.junit.Test;
 
 import java.math.BigDecimal;
@@ -19,5 +21,21 @@ public class BigDecimalByteConverter2Test {
     BigDecimalByteConverterTest.testBinary(
         new BigDecimal(BigInteger.TEN.pow(131072).subtract(BigInteger.ONE))
     );
+  }
+
+  @Test
+  public void largestScaleAndWeightThatFit() {
+    BigDecimalByteConverterTest.testBinary(new BigDecimal("1e-16383"));
+    BigDecimalByteConverterTest.testBinary(new BigDecimal("1e131071"));
+  }
+
+  @Test(timeout = 10000)
+  public void valueOutsideTheBinaryFormatIsRefused() {
+    final String[] values =
+        {"999999.99e-262144", "1e131072", "1e-200000000", "0e-16384", "-1e-16384"};
+    for (String value : values) {
+      final BigDecimal number = new BigDecimal(value);
+      assertThrows(value, IllegalArgumentException.class, () -> ByteConverter.numeric(number));
+    }
   }
 }

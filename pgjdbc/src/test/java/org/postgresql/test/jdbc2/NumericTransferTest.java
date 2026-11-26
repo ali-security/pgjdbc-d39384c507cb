@@ -6,9 +6,11 @@
 package org.postgresql.test.jdbc2;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertThrows;
 
 import org.postgresql.PGProperty;
 import org.postgresql.core.Oid;
+import org.postgresql.util.PSQLState;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -82,5 +84,14 @@ public class NumericTransferTest extends BaseTest4 {
       }
     }
     statement.close();
+  }
+
+  @Test
+  public void sendValueOutsideTheNumericRange() throws SQLException {
+    try (PreparedStatement statement = con.prepareStatement("select ?::numeric")) {
+      statement.setBigDecimal(1, new BigDecimal("999999.99e-262144"));
+      SQLException e = assertThrows(SQLException.class, statement::executeQuery);
+      assertEquals(PSQLState.NUMERIC_VALUE_OUT_OF_RANGE.getState(), e.getSQLState());
+    }
   }
 }
