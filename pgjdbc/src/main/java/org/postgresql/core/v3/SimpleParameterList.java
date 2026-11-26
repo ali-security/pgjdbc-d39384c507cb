@@ -7,6 +7,7 @@
 package org.postgresql.core.v3;
 
 import org.postgresql.core.Oid;
+import org.postgresql.core.PGBindException;
 import org.postgresql.core.PGStream;
 import org.postgresql.core.ParameterList;
 import org.postgresql.core.Utils;
@@ -403,7 +404,15 @@ class SimpleParameterList implements V3ParameterList {
       return;
     }
 
-    pgStream.sendStream(wrapper.getStream(), wrapper.getLength());
+    InputStream stream;
+    try {
+      stream = wrapper.getStream();
+    } catch (IOException e) {
+      // Nothing of the value is written yet, so the whole length has to be padded.
+      pgStream.send(new byte[0], wrapper.getLength());
+      throw new PGBindException(e);
+    }
+    pgStream.sendStream(stream, wrapper.getLength());
   }
 
   //

@@ -7,6 +7,7 @@ package org.postgresql.test.jdbc2;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -17,6 +18,7 @@ import org.postgresql.jdbc.PgStatement;
 import org.postgresql.jdbc.PreferQueryMode;
 import org.postgresql.test.TestUtil;
 import org.postgresql.test.util.BrokenInputStream;
+import org.postgresql.util.PSQLState;
 
 import org.junit.Assert;
 import org.junit.Assume;
@@ -32,6 +34,7 @@ import java.io.PrintWriter;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.math.RoundingMode;
+import java.sql.Connection;
 import java.sql.ParameterMetaData;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -41,6 +44,7 @@ import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -193,6 +197,83 @@ public class PreparedStatementTest extends BaseTest4 {
     // Total Bind message length too long.
     is = new ByteArrayInputStream(buf);
     runBrokenStream(is, Integer.MAX_VALUE);
+  }
+
+  private static byte[] spooledStreamData() {
+    // A stream without a length that exceeds the in-memory limit is spooled to a temporary file,
+    // and the file is released once the value has been sent with a Bind.
+    byte[] buf = new byte[100000];
+    for (int i = 0; i < buf.length; i++) {
+      buf[i] = (byte) i;
+    }
+    return buf;
+  }
+
+  @Test
+  public void testReExecuteReleasedSpooledBinaryStream() throws SQLException {
+    assumeByteaSupported();
+    PreparedStatement pstmt =
+        con.prepareStatement("INSERT INTO streamtable (bin,str) VALUES (?,?)");
+    pstmt.setBinaryStream(1, new ByteArrayInputStream(spooledStreamData()));
+    pstmt.setString(2, "first");
+    assertEquals(1, pstmt.executeUpdate());
+
+    // The second Bind cannot read the released value. It has to fail as a bind error, with the
+    // value padded to its declared length, rather than leave a partial Bind message in the send
+    // buffer, which the backend would complete with the bytes of the next request.
+    try {
+      pstmt.executeUpdate();
+      fail("Executing with a released stream value is supposed to fail");
+    } catch (SQLException e) {
+      assertEquals(PSQLState.INVALID_PARAMETER_VALUE.getState(), e.getSQLState());
+    }
+    pstmt.close();
+
+    // The connection is still usable, and the next request is not read as part of the value.
+    assertFalse(con.isClosed());
+    Statement stmt = con.createStatement();
+    ResultSet rs = stmt.executeQuery("SELECT COUNT(*), 'in sync' FROM streamtable");
+    assertTrue(rs.next());
+    assertEquals(1, rs.getInt(1));
+    assertEquals("in sync", rs.getString(2));
+    rs.close();
+    stmt.close();
+  }
+
+  @Test
+  public void testBatchReusingReleasedSpooledBinaryStream() throws SQLException {
+    assumeByteaSupported();
+    // The connection can be closed when the batch fails, so use a separate one.
+    Properties props = new Properties();
+    updateProperties(props);
+    Connection con2 = TestUtil.openDB(props);
+    try {
+      PreparedStatement pstmt =
+          con2.prepareStatement("INSERT INTO streamtable (bin,str) VALUES (?,?)");
+      pstmt.setBinaryStream(1, new ByteArrayInputStream(spooledStreamData()));
+      pstmt.setString(2, "first");
+      pstmt.addBatch();
+      // The second entry shares the spooled value, which the first Bind releases.
+      pstmt.setString(2, "second");
+      pstmt.addBatch();
+      Throwable failure = null;
+      try {
+        pstmt.executeBatch();
+      } catch (SQLException e) {
+        failure = e;
+      } catch (AssertionError e) {
+        // With assertions enabled, BatchResultHandler asserts that getAutoCommit() does not throw,
+        // which it does once the failed batch has closed the connection.
+        failure = e;
+      }
+      assertNotNull("Sending a released stream value is supposed to fail", failure);
+
+      // The batch cannot be completed, so the connection has to be closed rather than left with a
+      // partial Bind message, which the backend would complete with the bytes of the next request.
+      assertTrue("The connection should be closed", con2.isClosed());
+    } finally {
+      TestUtil.closeDB(con2);
+    }
   }
 
   private void runBrokenStream(InputStream is, int length) throws SQLException {

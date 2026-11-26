@@ -7,6 +7,7 @@ package org.postgresql.test.util;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -19,6 +20,7 @@ import org.junit.Test;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -166,6 +168,41 @@ public class ByteStreamWriterTest extends BaseTest4 {
           cause.getMessage(), "Error writing bytes to stream");
       Throwable nestedCause = cause.getCause();
       assertEquals("Incorrect exception cause", e, nestedCause);
+    }
+  }
+
+  @Test
+  public void testErrorWhileWritingClosesConnection() throws Exception {
+    // The connection is closed when the write fails, so use a separate one.
+    Connection con2 = TestUtil.openDB();
+    try {
+      final Error error = new Error("oh no");
+      PreparedStatement ps = con2.prepareStatement("SELECT ?");
+      ps.setObject(1, new ByteStreamWriter() {
+        @Override
+        public int getLength() {
+          return 100;
+        }
+
+        @Override
+        public void writeTo(ByteStreamTarget target) throws IOException {
+          target.getOutputStream().write(new byte[10]);
+          throw error;
+        }
+      });
+      Throwable thrown = null;
+      try {
+        ps.executeQuery();
+      } catch (Error e) {
+        thrown = e;
+      }
+      assertSame("Incorrect error", error, thrown);
+
+      // Part of the Bind message is in the send buffer, and the backend would complete it with
+      // the bytes of the next request, so the connection has to be closed.
+      assertTrue("The connection should be closed", con2.isClosed());
+    } finally {
+      TestUtil.closeDB(con2);
     }
   }
 
