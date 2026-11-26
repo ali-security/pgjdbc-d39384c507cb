@@ -5,6 +5,8 @@
 
 package org.postgresql.gss;
 
+import org.postgresql.util.GT;
+
 import org.ietf.jgss.GSSContext;
 import org.ietf.jgss.GSSException;
 import org.ietf.jgss.MessageProp;
@@ -14,7 +16,8 @@ import java.io.OutputStream;
 
 public class GSSOutputStream extends OutputStream {
   private final GSSContext gssContext;
-  private final MessageProp messageProp;
+  private final int qop;
+  private final boolean privacy;
   private byte[] buffer;
   private byte[] int4Buf = new byte[4];
   private int index;
@@ -23,7 +26,9 @@ public class GSSOutputStream extends OutputStream {
   public GSSOutputStream(OutputStream out, GSSContext gssContext, MessageProp messageProp, int bufferSize)  {
     wrapped = out;
     this.gssContext = gssContext;
-    this.messageProp = messageProp;
+    // unwrap writes the flags of each incoming token into its MessageProp, so keep a copy.
+    this.qop = messageProp.getQOP();
+    this.privacy = messageProp.getPrivacy();
     buffer = new byte[bufferSize];
   }
 
@@ -64,7 +69,11 @@ public class GSSOutputStream extends OutputStream {
   @Override
   public void flush() throws IOException {
     try {
+      MessageProp messageProp = new MessageProp(qop, privacy);
       byte[] token = gssContext.wrap(buffer, 0, index, messageProp);
+      if (privacy && !messageProp.getPrivacy()) {
+        throw new IOException(GT.tr("Outgoing GSS message would not use confidentiality."));
+      }
       sendInteger4Raw(token.length);
       wrapped.write(token, 0, token.length);
       index = 0;
