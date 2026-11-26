@@ -7,6 +7,8 @@ package org.postgresql.core.v3;
 
 import static org.junit.Assert.assertEquals;
 
+import org.postgresql.core.Oid;
+
 import org.junit.Before;
 import org.junit.Test;
 
@@ -61,5 +63,27 @@ public class V3ParameterListTests {
     assertEquals("Expected string representation of values does not match outcome.",
         "<[('1'::int4) ,('2'::int4) ,('3'::int4) ,('4'::int4) ,('5'::int4) ,('6'::int4) ,('7'::int4) ,('8'::int4)]>", s1SPL.toString());
 
+  }
+
+  /**
+   * A value with a backslash (or a yen sign, which the EUC_JP and Shift_JIS charsets encode as a
+   * backslash) is written as an {@code E''} literal, which reads the same whatever the value of
+   * {@code standard_conforming_strings}.
+   *
+   * @throws SQLException raised exception if setting parameter fails.
+   */
+  @Test
+  public void testStringLiteralIndependentOfStandardConformingStrings() throws SQLException {
+    SimpleParameterList spl = new SimpleParameterList(4, transferModeRegistry);
+    spl.setStringParameter(1, "\\'), (SELECT 1) --", Oid.VARCHAR);
+    spl.setStringParameter(2, "\u00a5'), (SELECT 1) --", Oid.VARCHAR);
+    spl.setStringParameter(3, "it's", Oid.VARCHAR);
+    spl.setStringParameter(4, "a\\b", Oid.INT4);
+    for (boolean standardConformingStrings : new boolean[]{true, false}) {
+      assertEquals("(E'\\\\''), (SELECT 1) --')", spl.toString(1, standardConformingStrings));
+      assertEquals("(E'\\\u00a5''), (SELECT 1) --')", spl.toString(2, standardConformingStrings));
+      assertEquals("('it''s')", spl.toString(3, standardConformingStrings));
+      assertEquals("(E'a\\\\b'::int4)", spl.toString(4, standardConformingStrings));
+    }
   }
 }

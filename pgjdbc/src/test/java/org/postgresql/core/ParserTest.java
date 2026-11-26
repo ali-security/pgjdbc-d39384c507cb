@@ -481,6 +481,35 @@ public class ParserTest {
     assertFalse(sql, sql.contains("--"));
   }
 
+  /**
+   * A parse is valid for the other value of standard_conforming_strings only when no backslash can
+   * move the end of a string literal around a placeholder.
+   */
+  @Test
+  public void nativeQueryIsParsedForStandardConformingStrings() throws SQLException {
+    NativeQuery on = Parser.parseJdbcSql("SELECT ?, '\\', ?", true, true, true, false, false).get(0);
+    assertEquals("SELECT $1, '\\', $2", on.nativeSql);
+    assertTrue(on.isParsedFor(true));
+    assertFalse(on.isParsedFor(false));
+
+    NativeQuery off = Parser.parseJdbcSql("SELECT ?, '\\''", false, true, true, false, false).get(0);
+    assertEquals(1, off.bindPositions.length);
+    assertTrue(off.isParsedFor(false));
+    assertFalse(off.isParsedFor(true));
+
+    NativeQuery noBackslash = Parser.parseJdbcSql("SELECT ?, ''", true, true, true, false, false).get(0);
+    assertTrue(noBackslash.isParsedFor(true));
+    assertTrue(noBackslash.isParsedFor(false));
+
+    NativeQuery noBinds = Parser.parseJdbcSql("SELECT '\\'", true, true, true, false, false).get(0);
+    assertTrue(noBinds.isParsedFor(true));
+    assertTrue(noBinds.isParsedFor(false));
+
+    NativeQuery legacy = new NativeQuery("SELECT $1, '\\'", new int[]{7}, false, SqlCommand.BLANK);
+    assertTrue(legacy.isParsedFor(true));
+    assertFalse(legacy.isParsedFor(false));
+  }
+
   @Test
   @SuppressWarnings("deprecation")
   public void legacyEscapedFunctionWithNegativeArgument() throws SQLException {
